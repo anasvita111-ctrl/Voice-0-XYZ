@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="إحداثيات الصوت" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#818cf8" />
+  <meta name="description" content="تطبيق تدريب الصوت البشري بالذكاء الاصطناعي — قِس وطوّر صوتك" />
+
+  <!-- PWA manifest -->
+  <link rel="manifest" href="/manifest.json" />
+
+  <!-- Apple touch icons -->
+  <link rel="apple-touch-icon" href="/icon-192.svg" />
+
+  <title>إحداثيات الصوت</title>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow-x: hidden; }
+    body {
+      background: #0d0f1a;
+      color: #f3f4f6;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overscroll-behavior: none;
+      /* Safe area for iPhone notch */
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    #root { min-height: 100vh; }
+    /* Native-feel scrolling */
+    * { -webkit-overflow-scrolling: touch; }
+    /* Remove tap highlight */
+    * { -webkit-tap-highlight-color: transparent; }
+    /* Loading screen */
+    #splash {
+      position: fixed; inset: 0; z-index: 9999;
+      background: #0d0f1a;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 20px;
+    }
+    #splash svg { animation: spin 1s linear infinite; }
+    #splash p { color: #818cf8; font-size: 14px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<!-- Splash screen shown while React loads -->
+<div id="splash">
+  <svg width="60" height="60" viewBox="0 0 60 60">
+    <circle cx="30" cy="30" r="24" fill="none" stroke="#252a4a" stroke-width="4"/>
+    <path d="M30 6 A24 24 0 0 1 54 30" fill="none" stroke="#818cf8" stroke-width="4" stroke-linecap="round"/>
+    <path d="M30 6 A24 24 0 0 0 6 30" fill="none" stroke="#a78bfa" stroke-width="4" stroke-linecap="round"/>
+  </svg>
+  <p>جارٍ تحميل التطبيق...</p>
+</div>
+
+<div id="root"></div>
+
+<!-- React + Babel (loaded from CDN — no build step needed) -->
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+<!-- App source (transformed inline by Babel) -->
+<script type="text/babel" data-presets="react" src="/app.jsx"></script>
+
+<script>
+  // Hide splash once React mounts
+  window.__hideSplash = function() {
+    const s = document.getElementById('splash');
+    if (s) { s.style.opacity = '0'; s.style.transition = 'opacity 0.4s'; setTimeout(() => s.remove(), 400); }
+  };
+
+  // Register service worker for offline support
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').then(() => {
+        console.log('SW registered');
+      }).catch(err => console.log('SW failed:', err));
+    });
+  }
+</script>
+</body>
+</html>

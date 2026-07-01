@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="192" height="192" viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#1e2048"/>
+      <stop offset="100%" stop-color="#0d0f1a"/>
+    </radialGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2.88" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <!-- Background -->
+  <rect width="192" height="192" rx="42.24" fill="url(#bg)"/>
+  <!-- Coordinate axes centered -->
+  <!-- X axis (cyan/indigo) -->
+  <line x1="34.56" y1="96" x2="157.44" y2="96"
+        stroke="#818cf8" stroke-width="8.64" stroke-linecap="round" filter="url(#glow)"/>
+  <!-- Y axis (pink/rose) -->
+  <line x1="96" y1="34.56" x2="96" y2="157.44"
+        stroke="#fb7185" stroke-width="8.64" stroke-linecap="round" filter="url(#glow)"/>
+  <!-- Z axis (amber, diagonal) -->
+  <line x1="42.24" y1="149.76" x2="149.76" y2="42.24"
+        stroke="#fbbf24" stroke-width="8.64" stroke-linecap="round" filter="url(#glow)"/>
+  <!-- Center dot -->
+  <circle cx="96" cy="96" r="10.56" fill="white" opacity="0.9"/>
+  <!-- Mic icon small -->
+  <circle cx="96" cy="96" r="3.84" fill="#0d0f1a"/>
+</svg>
