@@ -1,3 +1,4 @@
+/* Voice Coordinates — Meyda real-time build */
 const { useState, useRef, useEffect } = React;
 
 
@@ -37,22 +38,120 @@ const C = {
   snow:    "#f3f4f6",
 };
 
+// ─── MEYDA LOADER ─────────────────────────────────────────────────────────────
+// Loads Meyda.js from CDN once, returns the global Meyda object
+let _meydaPromise = null;
+function loadMeyda() {
+  if (_meydaPromise) return _meydaPromise;
+  _meydaPromise = new Promise((resolve, reject) => {
+    if (window.Meyda) { resolve(window.Meyda); return; }
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/meyda/5.6.0/meyda.min.js";
+    s.onload  = () => resolve(window.Meyda);
+    s.onerror = () => reject(new Error("Meyda failed to load"));
+    document.head.appendChild(s);
+  });
+  return _meydaPromise;
+}
+
 // ─── AUDIO ENGINE ─────────────────────────────────────────────────────────────
+// Smoothing factor: 0 = no smoothing, 1 = frozen. 0.82 = very smooth live feel.
+const SMOOTH = 0.82;
+
 class VoiceEngine {
-  constructor() { this.ctx = null; this.analyser = null; this.stream = null; this.chunks = []; this.recorder = null; }
+  constructor() {
+    this.ctx      = null;
+    this.analyser = null;
+    this.stream   = null;
+    this.chunks   = [];
+    this.recorder = null;
+    this.meydaAnalyser = null;
+    this.srcNode  = null;
+
+    // Smoothed real-time XYZ values
+    this.liveX = 0;
+    this.liveY = 0;
+    this.liveZ = 0;
+    this.liveRms = 0;
+    this._running = false;
+  }
 
   async start() {
     this.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const src = this.ctx.createMediaStreamSource(this.stream);
+    this.ctx    = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+    this.srcNode = this.ctx.createMediaStreamSource(this.stream);
+
+    // Analyser node for waveform display
     this.analyser = this.ctx.createAnalyser();
-    this.analyser.fftSize = 4096;
-    this.analyser.smoothingTimeConstant = 0.75;
-    src.connect(this.analyser);
-    this.chunks = [];
+    this.analyser.fftSize = 2048;
+    this.analyser.smoothingTimeConstant = 0.8;
+    this.srcNode.connect(this.analyser);
+
+    // Recording
+    this.chunks   = [];
     this.recorder = new MediaRecorder(this.stream);
     this.recorder.ondataavailable = e => this.chunks.push(e.data);
     this.recorder.start(100);
+    this._running = true;
+
+    // ── Meyda real-time feature extraction ───────────────────────
+    try {
+      const Meyda = await loadMeyda();
+      this.meydaAnalyser = Meyda.createMeydaAnalyzer({
+        audioContext: this.ctx,
+        source:       this.srcNode,
+        bufferSize:   512,          // ~11ms at 44100 Hz — responsive
+        featureExtractors: ["rms", "spectralCentroid", "mfcc"],
+        callback: (features) => {
+          if (!this._running || !features) return;
+
+          // ── Raw feature values ──────────────────────────────────
+          const rms      = features.rms       ?? 0;           // 0..1
+          const centroid = features.spectralCentroid ?? 1500; // Hz
+          const mfcc     = features.mfcc       ?? [];         // array[13]
+
+          // ── Map to -10..+10 ─────────────────────────────────────
+          // X: spectralCentroid → laryngeal tension
+          //    Low centroid (100-800Hz) = relaxed (-X), High (3000+Hz) = tense (+X)
+          const xRaw = this._mapRange(centroid, 100, 4000, -10, 10);
+
+          // Y: average of first 4 MFCC coefficients → resonance position
+          //    Negative MFCC avg = chest (-Y), Positive = head (+Y)
+          const mfccAvg = mfcc.length >= 4
+            ? (mfcc[1] + mfcc[2] + mfcc[3] + mfcc[4]) / 4
+            : 0;
+          const yRaw = this._mapRange(mfccAvg, -30, 30, -10, 10);
+
+          // Z: rms → airflow pressure
+          //    Silence = -10, loud = +10
+          const zRaw = this._mapRange(rms, 0, 0.4, -10, 10);
+
+          // ── Clamp ───────────────────────────────────────────────
+          const xC = this._clamp(xRaw, -10, 10);
+          const yC = this._clamp(yRaw, -10, 10);
+          const zC = this._clamp(zRaw, -10, 10);
+
+          // ── Exponential smoothing (prevents jitter) ──────────────
+          this.liveX   = SMOOTH * this.liveX   + (1 - SMOOTH) * xC;
+          this.liveY   = SMOOTH * this.liveY   + (1 - SMOOTH) * yC;
+          this.liveZ   = SMOOTH * this.liveZ   + (1 - SMOOTH) * zC;
+          this.liveRms = SMOOTH * this.liveRms + (1 - SMOOTH) * rms;
+        },
+      });
+      this.meydaAnalyser.start();
+    } catch (e) {
+      console.warn("Meyda unavailable, falling back to band analysis:", e);
+    }
+  }
+
+  // Returns live smoothed XYZ for real-time display
+  getLiveXYZ() {
+    return {
+      x: Math.round(this.liveX * 10) / 10,
+      y: Math.round(this.liveY * 10) / 10,
+      z: Math.round(this.liveZ * 10) / 10,
+      rms: this.liveRms,
+    };
   }
 
   getWaveform() {
@@ -61,14 +160,12 @@ class VoiceEngine {
     this.analyser.getByteTimeDomainData(buf);
     return buf;
   }
+
   getLevel() {
-    if (!this.analyser) return 0;
-    const buf = new Float32Array(this.analyser.fftSize);
-    this.analyser.getFloatTimeDomainData(buf);
-    let sum = 0; for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-    return Math.sqrt(sum / buf.length);
+    return this.liveRms;
   }
-  // Live single-axis estimate (cheap, for the live needle on axis screens)
+
+  // Fallback band analysis (used when Meyda not loaded yet)
   getLiveBands() {
     if (!this.analyser) return { low: 0, mid: 0, high: 0 };
     const buf = new Uint8Array(this.analyser.frequencyBinCount);
@@ -79,12 +176,19 @@ class VoiceEngine {
   }
 
   async stop() {
+    this._running = false;
+    this.meydaAnalyser?.stop();
+    this.meydaAnalyser = null;
     return new Promise(resolve => {
       if (!this.recorder) { resolve(null); return; }
       this.recorder.onstop = () => resolve(new Blob(this.chunks, { type: "audio/webm" }));
       this.recorder.stop();
       this.stream?.getTracks().forEach(t => t.stop());
     });
+  }
+
+  _mapRange(v, inLo, inHi, outLo, outHi) {
+    return outLo + ((v - inLo) / (inHi - inLo)) * (outHi - outLo);
   }
 
   async analyseBlob(blob) {
@@ -436,6 +540,7 @@ function App() {
   const [recSecs, setRecSecs] = useState(0);
   const [liveVal, setLiveVal] = useState(0);
   const [liveBands, setLiveBands] = useState({ low:0, mid:0, high:0 });
+  const [liveXYZ, setLiveXYZ] = useState({ x:0, y:0, z:0, rms:0 });
   const [activeAxis, setActiveAxis] = useState(null); // 'x' | 'y' | 'z' | null — which axis screen is recording
   const [lastFeats, setLastFeats] = useState(null);
   const [recordings, setRecordings] = useState([]); // {id, name, date, feats}
@@ -473,12 +578,13 @@ function App() {
   useEffect(() => {
     if (recState !== "recording") return;
     liveTimer.current = setInterval(() => {
-      const b = engine.getLiveBands();
-      setLiveBands(b);
-      if (activeAxis === "x") setLiveVal(+((b.low - b.high) * 10).toFixed(1));
-      if (activeAxis === "y") setLiveVal(+((b.high - b.low) * 10).toFixed(1));
-      if (activeAxis === "z") setLiveVal(+((engine.getLevel() * 20) - 4).toFixed(1));
-    }, 120);
+      const xyz = engine.getLiveXYZ();
+      // Always update liveXYZ so gauge and dot both move
+      setLiveXYZ(xyz);
+      if (activeAxis === "x") setLiveVal(xyz.x);
+      if (activeAxis === "y") setLiveVal(xyz.y);
+      if (activeAxis === "z") setLiveVal(xyz.z);
+    }, 80);
     return () => clearInterval(liveTimer.current);
   }, [recState, activeAxis]);
 
@@ -605,7 +711,7 @@ function App() {
         </div>
 
         <div style={card(cfg.color)}>
-          <AxisGauge axisLabel={cfg.label} value={displayVal} color={cfg.color} live={isLive} liveLevel={engine.getLevel?.()||0} />
+          <AxisGauge axisLabel={cfg.label} value={displayVal} color={cfg.color} live={isLive} liveLevel={liveXYZ.rms * 6} />
           <div style={{ display:"flex", justifyContent:"space-between", marginTop:4, direction:"ltr" }}>
             <span style={{ fontSize:12, color:C.purple, textAlign:"right" }}>{cfg.neg}</span>
             <span style={{ fontSize:12, color:cfg.color, textAlign:"left" }}>{cfg.pos}</span>
@@ -749,7 +855,24 @@ function App() {
       {recState === "recording" && activeAxis === "analyze" && (
         <div style={card(C.green)}>
           <LiveWaveform active />
-          <div style={{ textAlign:"center", marginTop:10 }}>
+          {/* Live XYZ coordinate display — powered by Meyda real-time */}
+          <div style={{ display:"flex", gap:8, margin:"12px 0 8px" }}>
+            {[
+              { ax:"X", v:liveXYZ.x, c:C.cyan },
+              { ax:"Y", v:liveXYZ.y, c:C.pink },
+              { ax:"Z", v:liveXYZ.z, c:C.gold },
+            ].map(d => (
+              <div key={d.ax} style={{
+                flex:1, textAlign:"center", padding:"8px 4px",
+                borderRadius:10, background:`${d.c}14`, border:`1px solid ${d.c}33`,
+              }}>
+                <div style={{ fontFamily:"monospace", fontSize:17, fontWeight:800, color:d.c, direction:"ltr" }}>
+                  {d.ax} = {d.v > 0 ? "+" : ""}{d.v.toFixed(1)}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ textAlign:"center" }}>
             <span style={{ color:C.green, fontWeight:700, fontSize:20, animation:"blink 1s infinite" }}>● {recSecs}s</span>
           </div>
           <button onClick={() => stopRecording(true)} style={{ ...btn(`linear-gradient(135deg, ${C.pink}, ${C.purple})`, C.snow), marginTop:12 }}>
@@ -882,10 +1005,8 @@ function App() {
 }
 
 
-// Mount app
-const container = document.getElementById('root');
-const reactRoot = ReactDOM.createRoot(container);
-reactRoot.render(React.createElement(App));
-
-// Hide splash screen
+// ── Mount ──────────────────────────────────────────────────────────────────
+const _container = document.getElementById('root');
+const _root = ReactDOM.createRoot(_container);
+_root.render(React.createElement(App));
 if (window.__hideSplash) window.__hideSplash();
